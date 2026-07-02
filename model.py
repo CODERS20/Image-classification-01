@@ -43,6 +43,7 @@ class block(nn.Module):
     x = self.relu(x)
     return x
 
+
 class ResNet(nn.Module):
   #implementing the ResNet 50 architecture
   #the 1st block is used 3 times
