@@ -24,15 +24,22 @@ class increase_contrast(object):
     def __call__(self, img):
         return TF.adjust_contrast(img, contrast_factor=1.8)
 
-transform = transforms.Compose([
-    transforms.Resize((256,256)),
+
+train_transform = transforms.Compose([
+    transforms.Resize((256, 256)),
     increase_contrast(),
     transforms.RandomHorizontalFlip(),
     transforms.RandomRotation(degrees=180),
     transforms.ToTensor()
 ])
 
-dataset = datasets.ImageFolder(root = data_directory,transform = transform)
+test_transform = transforms.Compose([
+    transforms.Resize((256, 256)),
+    increase_contrast(),
+    transforms.ToTensor()
+])
+
+dataset = datasets.ImageFolder(root = data_directory,transform = None)
 
 #train test validation
 
@@ -47,17 +54,29 @@ train_set,val_set,test_set = random_split(
     generator=torch.Generator().manual_seed(40)
 )
 
-train_loader = DataLoader(train_set,batch_size=32,shuffle=True,num_workers=2,pin_memory=True)
-val_loader = DataLoader(val_set,batch_size=32,shuffle=False)
-test_loader = DataLoader(test_set,batch_size=32,shuffle=False)
+class transform_subset(Dataset):
+  def __init__(self,subset,transform):
+    self.subset = subset
+    self.transform = transform
 
-transform = transforms.Compose([
-    transforms.Resize((256,256)),
-    increase_contrast(),
-    transforms.RandomHorizontalFlip(),
-    transforms.RandomRotation(degrees=180),
-    transforms.ToTensor()
-])
+  def __getitem__(self,index):
+    img,label = self.subset[index]
+
+    if self.transform:
+      img = self.transform(img)
+
+    return img,label
+
+  def __len__(self):
+    return len(self.subset)
+
+modified_train = transform_subset(train_set,train_transform)
+modified_val = transform_subset(val_set,test_transform)
+modified_test = transform_subset(test_set,test_transform)
+
+train_loader = DataLoader(modified_train,batch_size=32,shuffle=True,num_workers=2,pin_memory=True)
+val_loader = DataLoader(modified_val,batch_size=32,shuffle=False)
+test_loader = DataLoader(modified_test,batch_size=32,shuffle=False)
 
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
@@ -67,12 +86,21 @@ def ResNet50(img_channels=3, num_classes = 5):
   return ResNet(block,[3,4,6,3],img_channels,num_classes)
 
 model = ResNet50(img_channels=3, num_classes=5).to(device)
+
 criterion = nn.CrossEntropyLoss()
 optimizer = optim.Adam(model.parameters(), lr=1e-4, weight_decay=1e-5)
 
+#adjusts the learning rate to prevent bouncing according the losses
+scheduler = optim.lr_scheduler.ReduceLROnPlateau(
+    optimizer,
+    mode='min',
+    factor=0.5,
+    patience=3
+)
+
 
 #training
-for epoch in range(30):
+for epoch in range(45):
     print(f'Training epoch {epoch}..')
 
     model.train()
@@ -93,5 +121,9 @@ for epoch in range(30):
         optimizer.step()
 
         running_loss += loss.item()
+        epoch_loss = running_loss / len(train_loader)
+    print(f'Loss: {epoch_loss:.4f}')
+    scheduler.step(epoch_loss)
 
-    print(f'Loss: {running_loss/len(train_loader):.4f}')
+torch.save(model.state_dict(), 'trained_net.pth')
+print("Training complete. Weights saved to trained_net.pth")
